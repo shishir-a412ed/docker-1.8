@@ -751,6 +751,36 @@ func activateDevice(poolName string, name string, deviceId int, size uint64, ext
 	return nil
 }
 
+// CreateSnapDeviceRaw creates a snapshot device. Caller needs to suspend and resume the origin device if it is active.
+func CreateSnapDeviceRaw(poolName string, deviceId int, baseDeviceId int) error {
+	task, err := TaskCreateNamed(DeviceTargetMsg, poolName)
+	if task == nil {
+		return err
+	}
+
+	if err := task.SetSector(0); err != nil {
+		return fmt.Errorf("Can't set sector %s", err)
+	}
+
+	if err := task.SetMessage(fmt.Sprintf("create_snap %d %d", deviceId, baseDeviceId)); err != nil {
+		return fmt.Errorf("Can't set message %s", err)
+	}
+
+	dmSawExist = false // reset before the task is run
+	if err := task.Run(); err != nil {
+		// Caller wants to know about ErrDeviceIdExists so that it can try with a different device id.
+		if dmSawExist {
+			return ErrDeviceIdExists
+		}
+
+		return fmt.Errorf("Error running DeviceCreate (createSnapDevice) %s", err)
+
+	}
+
+	return nil
+}
+
+// CreateSnapDevice creates a snapshot based on the device identified by the baseName and baseDeviceId,
 func CreateSnapDevice(poolName string, deviceId int, baseName string, baseDeviceId int) error {
 	devinfo, _ := GetInfo(baseName)
 	doSuspend := devinfo != nil && devinfo.Exists != 0
@@ -761,40 +791,13 @@ func CreateSnapDevice(poolName string, deviceId int, baseName string, baseDevice
 		}
 	}
 
-	task, err := TaskCreateNamed(DeviceTargetMsg, poolName)
-	if task == nil {
+	if err := CreateSnapDeviceRaw(poolName, deviceId, baseDeviceId); err != nil {
 		if doSuspend {
-			ResumeDevice(baseName)
+			if err2 := ResumeDevice(baseName); err2 != nil {
+				return fmt.Errorf("CreateSnapDeviceRaw Error: (%v): ResumeDevice Error: (%v)", err, err2)
+			}
 		}
 		return err
-	}
-
-	if err := task.SetSector(0); err != nil {
-		if doSuspend {
-			ResumeDevice(baseName)
-		}
-		return fmt.Errorf("Can't set sector %s", err)
-	}
-
-	if err := task.SetMessage(fmt.Sprintf("create_snap %d %d", deviceId, baseDeviceId)); err != nil {
-		if doSuspend {
-			ResumeDevice(baseName)
-		}
-		return fmt.Errorf("Can't set message %s", err)
-	}
-
-	dmSawExist = false // reset before the task is run
-	if err := task.Run(); err != nil {
-		if doSuspend {
-			ResumeDevice(baseName)
-		}
-		// Caller wants to know about ErrDeviceIdExists so that it can try with a different device id.
-		if dmSawExist {
-			return ErrDeviceIdExists
-		}
-
-		return fmt.Errorf("Error running DeviceCreate (createSnapDevice) %s", err)
-
 	}
 
 	if doSuspend {
